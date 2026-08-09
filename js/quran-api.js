@@ -6,18 +6,24 @@
    ========================================================= */
 
 const QuranAPI = (() => {
-  const BASE = "https://api.alquran.cloud/v1";
+  const BASE = "https://api.alquran.cloud/v1"; // مصدر رواية حفص + بيانات السور + المتشابهات
+  const WARSH_BASE = "https://api.quranhub.com/v1"; // مصدر رواية ورش عن نافع
   const SURAH_NO = 4; // سورة النساء
-  const TEXT_EDITION = "quran-uthmani"; // رسم عثماني - رواية حفص (انظر ملاحظة الروايات في الواجهة)
+  const TEXT_EDITION_HAFS = "quran-uthmani";  // رسم عثماني - رواية حفص عن عاصم
+  const TEXT_EDITION_WARSH = "quran-warsh";   // رواية ورش عن نافع (تطابق نص مصحف الجزائر "مصحف الشاذلي")
   const AUDIO_EDITION = "ar.alafasy";
   const MUTASHABIHAT_URL =
     "https://raw.githubusercontent.com/Waqar144/Quran_Mutashabihat_Data/master/mutashabiha_data.json";
 
+  const RIWAYA_KEY = "nisa-app-riwaya";
+  let activeRiwaya = localStorage.getItem(RIWAYA_KEY) || "warsh"; // الافتراضي: ورش عن نافع
+  let lastFetchFellBack = false; // هل تعذّر جلب ورش فعادت القراءة تلقائيًا لحفص؟
+
   const cache = {
-    surahAyahs: null,      // نص آيات سورة النساء كاملة
-    surahList: null,       // بيانات كل سور القرآن (لحساب الأرقام المطلقة)
+    surahAyahs: { hafs: null, warsh: null }, // نص آيات سورة النساء كاملة، لكل رواية
+    surahList: null,       // بيانات كل سور القرآن (لحساب الأرقام المطلقة) - رواية حفص فقط (للمتشابهات)
     mutashabihat: null,    // قاعدة بيانات المتشابهات كاملة
-    ayahByAbs: new Map()   // تخزين مؤقت للآيات المفردة بالرقم المطلق
+    ayahByAbs: new Map()   // تخزين مؤقت للآيات المفردة بالرقم المطلق (رواية حفص، لغرض المتشابهات)
   };
 
   async function fetchJSON(url) {
@@ -26,12 +32,38 @@ const QuranAPI = (() => {
     return res.json();
   }
 
-  // جلب نص سورة النساء كاملة (176 آية) مرة واحدة وتخزينها مؤقتًا للجلسة
+  function getActiveRiwaya() { return activeRiwaya; }
+  function didFallBack() { return lastFetchFellBack; }
+
+  function setActiveRiwaya(r) {
+    activeRiwaya = (r === "hafs") ? "hafs" : "warsh";
+    localStorage.setItem(RIWAYA_KEY, activeRiwaya);
+  }
+
+  // جلب نص سورة النساء كاملة (176 آية) حسب الرواية النشطة، مع رجوع تلقائي لحفص إن تعذّر جلب ورش
   async function getSurahAyahs() {
-    if (cache.surahAyahs) return cache.surahAyahs;
-    const data = await fetchJSON(`${BASE}/surah/${SURAH_NO}/${TEXT_EDITION}`);
-    cache.surahAyahs = data.data.ayahs; // [{numberInSurah, number(=مطلق), text}, ...]
-    return cache.surahAyahs;
+    const r = activeRiwaya;
+    if (cache.surahAyahs[r]) { lastFetchFellBack = false; return cache.surahAyahs[r]; }
+
+    if (r === "warsh") {
+      try {
+        const data = await fetchJSON(`${WARSH_BASE}/surah/${SURAH_NO}/${TEXT_EDITION_WARSH}`);
+        cache.surahAyahs.warsh = data.data.ayahs;
+        lastFetchFellBack = false;
+        return cache.surahAyahs.warsh;
+      } catch (e) {
+        // تعذّر مصدر ورش (اتصال أو تغيّر في الواجهة) — نرجع مؤقتًا لحفص دون كسر التطبيق
+        lastFetchFellBack = true;
+        const data = await fetchJSON(`${BASE}/surah/${SURAH_NO}/${TEXT_EDITION_HAFS}`);
+        cache.surahAyahs.hafs = data.data.ayahs;
+        return cache.surahAyahs.hafs;
+      }
+    } else {
+      const data = await fetchJSON(`${BASE}/surah/${SURAH_NO}/${TEXT_EDITION_HAFS}`);
+      cache.surahAyahs.hafs = data.data.ayahs;
+      lastFetchFellBack = false;
+      return cache.surahAyahs.hafs;
+    }
   }
 
   // آيات نطاق معيّن [from,to] ضمن سورة النساء (أرقام داخل السورة)
@@ -118,6 +150,9 @@ const QuranAPI = (() => {
     getNisaAbsoluteRange,
     getMutashabihatForRange,
     getAyahByAbsolute,
-    getAyahsByAbsoluteList
+    getAyahsByAbsoluteList,
+    getActiveRiwaya,
+    setActiveRiwaya,
+    didFallBack
   };
 })();

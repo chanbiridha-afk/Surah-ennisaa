@@ -88,7 +88,7 @@ const App = (() => {
               <td class="num">${s.count}</td>
             </tr>`).join("")}
         </table>
-        <p class="settings-note">هذا التطبيق يعرض النص برواية حفص عن عاصم برسم عثماني (176 آية، العدّ الكوفي)، وهو ما يوافق ترقيم أكثر المصاحف المطبوعة اليوم بما فيها طبعات رواية ورش المتداولة في الجزائر.</p>
+        <p class="settings-note">النص المعروض افتراضيًّا في التطبيق هو رواية ورش عن نافع (وفق ترقيمها المطابق للعدّ الكوفي، 176 آية)، وهي الرواية المعتمدة في مصحف الجزائر المعروف بـ"مصحف الشاذلي". يمكن التبديل إلى رواية حفص من زر الرواية أعلى شاشتي الحفظ والمراجعة. يبقى هذا نصًّا رقميًّا لأغراض العرض؛ ترقيم الصفحات والأسطر يطابق مصحفكم المطبوع فقط في عدد الآيات لا في تخطيط الصفحة.</p>
       </div>`;
     }
     return `
@@ -158,6 +158,64 @@ const App = (() => {
       </div>`;
   }
 
+  /* ---------------- عداد التكرار (حفظ/مراجعة) ---------------- */
+  function renderRepCounterHTML(sectionId, kind) {
+    const t = RepCounter.target(kind);
+    const n = RepCounter.get(sectionId, kind);
+    const pct = Math.min(100, Math.round((n / t.count) * 100));
+    const doneClass = n >= t.count ? "done" : "";
+    return `
+      <div class="rep-counter" data-rep-section="${sectionId}" data-rep-kind="${kind}">
+        <div class="rep-head">
+          <h3>عداد التكرار — ${t.label}</h3>
+          <span class="rep-target">الموصى به: ${t.count} مرة</span>
+        </div>
+        <div class="rep-row">
+          <span class="rep-count">${n}</span>
+          <div class="rep-bar"><div class="rep-bar-fill ${doneClass}" style="width:${pct}%"></div></div>
+        </div>
+        <div class="rep-btns">
+          <button class="rep-btn plus ${doneClass}" data-act="rep-plus">+ سمّعتُها مرة أخرى</button>
+          <button class="rep-btn reset" data-act="rep-reset">↺</button>
+        </div>
+        ${n >= t.count ? `<div class="rep-goal-msg">✓ بلغتَ العدد الموصى به لـ${t.label}</div>` : ""}
+        <div class="settings-note">${t.note}</div>
+      </div>`;
+  }
+
+  function bindRepCounter(container, sectionId, kind, onChange) {
+    const wrap = container.querySelector(`[data-rep-section="${sectionId}"][data-rep-kind="${kind}"]`);
+    if (!wrap) return;
+    wrap.querySelector('[data-act="rep-plus"]').addEventListener("click", () => {
+      RepCounter.increment(sectionId, kind);
+      if (onChange) onChange();
+    });
+    wrap.querySelector('[data-act="rep-reset"]').addEventListener("click", () => {
+      RepCounter.reset(sectionId, kind);
+      if (onChange) onChange();
+    });
+  }
+
+  /* ---------------- تبديل الرواية (ورش / حفص) ---------------- */
+  function riwayaToggleHTML() {
+    const active = QuranAPI.getActiveRiwaya();
+    return `
+      <div class="riwaya-toggle" id="riwayaToggle">
+        <button data-riwaya="warsh" class="${active === "warsh" ? "active" : ""}">رواية ورش</button>
+        <button data-riwaya="hafs" class="${active === "hafs" ? "active" : ""}">رواية حفص</button>
+      </div>`;
+  }
+  function bindRiwayaToggle(onSwitch) {
+    const wrap = document.getElementById("riwayaToggle");
+    if (!wrap) return;
+    wrap.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        QuranAPI.setActiveRiwaya(btn.dataset.riwaya);
+        onSwitch();
+      });
+    });
+  }
+
   /* ---------------- شاشة الحفظ لمقطع محدّد ---------------- */
   async function renderMemorizeSection(id) {
     const topic = NISA_TOPICS.find(t => t.id === id);
@@ -168,17 +226,23 @@ const App = (() => {
         <h1>${topic.title}</h1>
         <div class="sub">من الآية ${topic.from} إلى الآية ${topic.to}</div>
       </div>
-      <div class="page-wrap" id="ayahContainer">
-        <div class="loading"><div class="spin"></div><p>جارٍ تحميل الآيات من المصحف الشريف…</p></div>
+      <div class="page-wrap">
+        ${riwayaToggleHTML()}
+        <div id="ayahContainer">
+          <div class="loading"><div class="spin"></div><p>جارٍ تحميل الآيات من المصحف الشريف…</p></div>
+        </div>
       </div>
     `);
     bindBack();
+    bindRiwayaToggle(() => renderMemorizeSection(id));
 
     try {
-      const [ayahs] = await Promise.all([QuranAPI.getAyahRange(topic.from, topic.to)]);
+      const ayahs = await QuranAPI.getAyahRange(topic.from, topic.to);
       const sec = SRS.getSection(id);
       const container = document.getElementById("ayahContainer");
+      const fellBack = QuranAPI.didFallBack();
       container.innerHTML = `
+        ${fellBack ? `<div class="settings-note">تعذّر الوصول مؤقتًا لمصدر نص ورش، فعُرض نص حفص بدلًا منه. أعد المحاولة لاحقًا.</div>` : ""}
         <div class="ayah-block">
           <div class="ayah-text">
             ${ayahs.map(a => `${a.text} <span class="ayah-num">${a.numberInSurah}</span>`).join(" ")}
@@ -187,6 +251,7 @@ const App = (() => {
         <div class="card">
           <h2>تتبّع الحفظ</h2>
           <p>بعد إتقان حفظ هذا المقطع، اضغط الزر أدناه ليبدأ جدول المراجعة (مراجعة قريبة ثم مراجعة بعيدة تلقائيًا).</p>
+          ${renderRepCounterHTML(id, "memorize")}
           <div class="ayah-actions">
             <button id="memBtn" class="chip-btn memorize ${sec.status === "memorized" ? "done" : ""}">
               ${sec.status === "memorized" ? "✓ محفوظ" : "🟢 تعليم كمحفوظ"}
@@ -196,8 +261,10 @@ const App = (() => {
           ${sec.status === "memorized" ? renderSectionScheduleInfo(sec) : ""}
         </div>
       `;
+      bindRepCounter(container, id, "memorize", () => renderMemorizeSection(id));
       document.getElementById("memBtn").addEventListener("click", () => {
         SRS.markMemorized(id);
+        RepCounter.reset(id, "memorize");
         toast("تم تسجيل الحفظ، بدأ جدول المراجعة القريبة 🎉");
         renderMemorizeSection(id);
       });
@@ -267,6 +334,8 @@ const App = (() => {
 
   async function openReviewSession(id) {
     const topic = NISA_TOPICS.find(t => t.id === id);
+    const sec0 = SRS.getSection(id);
+    const kind = sec0.stage === "far" ? "far" : "near";
     root.innerHTML = shell(`
       <div class="ornament-frame">
         <button id="backBtn" style="position:absolute;right:14px;top:14px;background:none;border:none;color:var(--gold-light);font-size:1.3rem;">←</button>
@@ -274,32 +343,43 @@ const App = (() => {
         <h1>${topic.title}</h1>
         <div class="sub">الآيات ${topic.from}–${topic.to}</div>
       </div>
-      <div class="page-wrap" id="revContainer">
-        <div class="loading"><div class="spin"></div></div>
+      <div class="page-wrap">
+        ${riwayaToggleHTML()}
+        <div id="revContainer">
+          <div class="loading"><div class="spin"></div></div>
+        </div>
       </div>
     `);
     bindBack(() => navTo("review"));
+    bindRiwayaToggle(() => openReviewSession(id));
     try {
       const ayahs = await QuranAPI.getAyahRange(topic.from, topic.to);
-      document.getElementById("revContainer").innerHTML = `
+      const fellBack = QuranAPI.didFallBack();
+      const container = document.getElementById("revContainer");
+      container.innerHTML = `
+        ${fellBack ? `<div class="settings-note">تعذّر الوصول مؤقتًا لمصدر نص ورش، فعُرض نص حفص بدلًا منه.</div>` : ""}
         <div class="ayah-block">
           <div class="ayah-text">${ayahs.map(a => `${a.text} <span class="ayah-num">${a.numberInSurah}</span>`).join(" ")}</div>
         </div>
         <div class="card">
           <p>راجع المقطع تسميعًا أو نظرًا، ثم سجّل نتيجة المراجعة:</p>
+          ${renderRepCounterHTML(id, kind)}
           <div class="ayah-actions">
             <button id="okBtn" class="chip-btn memorize">✓ تمت المراجعة بإتقان</button>
             <button id="forgotBtn" class="chip-btn ghost">↺ احتجت لإعادة الحفظ</button>
           </div>
         </div>
       `;
+      bindRepCounter(container, id, kind, () => openReviewSession(id));
       document.getElementById("okBtn").addEventListener("click", () => {
         SRS.completeReview(id);
+        RepCounter.reset(id, kind);
         toast("أُحسنت! تم جدولة المراجعة القادمة");
         navTo("review");
       });
       document.getElementById("forgotBtn").addEventListener("click", () => {
         SRS.resetToNear(id);
+        RepCounter.reset(id, "near");
         toast("لا بأس، أُعيد المقطع لبداية المراجعة القريبة");
         navTo("review");
       });
